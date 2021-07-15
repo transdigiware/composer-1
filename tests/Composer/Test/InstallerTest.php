@@ -82,6 +82,7 @@ class InstallerTest extends TestCase
         $installationManager = new InstallationManagerMock();
 
         // emulate a writable lock file
+        /** @var ?string $lockData */
         $lockData = null;
         $lockJsonMock = $this->getMockBuilder('Composer\Json\JsonFile')->disableOriginalConstructor()->getMock();
         $lockJsonMock->expects($this->any())
@@ -378,6 +379,7 @@ class InstallerTest extends TestCase
             $this->assertSame($expectInstalled, $actualInstalled);
         }
 
+        /** @var InstallationManagerMock $installationManager */
         $installationManager = $composer->getInstallationManager();
         $this->assertSame(rtrim($expect), implode("\n", $installationManager->getTrace()));
 

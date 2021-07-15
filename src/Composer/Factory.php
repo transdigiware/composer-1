@@ -37,6 +37,7 @@ use Composer\EventDispatcher\EventDispatcher;
 use Composer\Autoload\AutoloadGenerator;
 use Composer\Package\Version\VersionParser;
 use Composer\Downloader\TransportException;
+use Composer\Json\JsonValidationException;
 use Seld\JsonLint\JsonParser;
 
 /**
@@ -121,6 +122,15 @@ class Factory
         }
 
         $userDir = self::getUserDir();
+        if (PHP_OS === 'Darwin') {
+            // Migrate existing cache dir in old location if present
+            if (is_dir($home . '/cache') && !is_dir($userDir . '/Library/Caches/composer')) {
+                Silencer::call('rename', $home . '/cache', $userDir . '/Library/Caches/composer');
+            }
+
+            return $userDir . '/Library/Caches/composer';
+        }
+
         if ($home === $userDir . '/.composer' && is_dir($home . '/cache')) {
             return $home . '/cache';
         }
@@ -295,11 +305,17 @@ class Factory
                 } else {
                     $message = 'Composer could not find the config file: '.$localConfig;
                 }
-                $instructions = $fullLoad ? 'To initialize a project, please create a composer.json file as described in the https://getcomposer.org/ "Getting Started" section' : '';
+                $instructions = $fullLoad ? 'To initialize a project, please create a composer.json file. See https://getcomposer.org/basic-usage' : '';
                 throw new \InvalidArgumentException($message.PHP_EOL.$instructions);
             }
 
-            $file->validateSchema(JsonFile::LAX_SCHEMA);
+            try {
+                $file->validateSchema(JsonFile::LAX_SCHEMA);
+            } catch (JsonValidationException $e) {
+                $errors = ' - ' . implode(PHP_EOL . ' - ', $e->getErrors());
+                $message = $e->getMessage() . ':' . PHP_EOL . $errors;
+                throw new JsonValidationException($message);
+            }
             $jsonParser = new JsonParser;
             try {
                 $jsonParser->parse(file_get_contents($localConfig), JsonParser::DETECT_KEY_CONFLICTS);
@@ -369,7 +385,7 @@ class Factory
         $composer->setPackage($package);
 
         // load local repository
-        $this->addLocalRepository($io, $rm, $vendorDir, $package);
+        $this->addLocalRepository($io, $rm, $vendorDir, $package, $process);
 
         // initialize installation manager
         $im = $this->createInstallationManager($loop, $io, $dispatcher);
@@ -442,9 +458,14 @@ class Factory
      * @param Repository\RepositoryManager $rm
      * @param string                       $vendorDir
      */
-    protected function addLocalRepository(IOInterface $io, RepositoryManager $rm, $vendorDir, RootPackageInterface $rootPackage)
+    protected function addLocalRepository(IOInterface $io, RepositoryManager $rm, $vendorDir, RootPackageInterface $rootPackage, ProcessExecutor $process = null)
     {
-        $rm->setLocalRepository(new Repository\InstalledFilesystemRepository(new JsonFile($vendorDir.'/composer/installed.json', null, $io), true, $rootPackage));
+        $fs = null;
+        if ($process) {
+            $fs = new Filesystem($process);
+        }
+
+        $rm->setLocalRepository(new Repository\InstalledFilesystemRepository(new JsonFile($vendorDir.'/composer/installed.json', null, $io), true, $rootPackage, $fs));
     }
 
     /**

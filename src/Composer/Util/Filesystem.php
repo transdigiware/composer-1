@@ -12,7 +12,7 @@
 
 namespace Composer\Util;
 
-use React\Promise\Promise;
+use React\Promise\PromiseInterface;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Symfony\Component\Filesystem\Exception\IOException;
@@ -24,7 +24,7 @@ use Symfony\Component\Finder\Finder;
  */
 class Filesystem
 {
-    /** @var ProcessExecutor */
+    /** @var ?ProcessExecutor */
     private $processExecutor;
 
     public function __construct(ProcessExecutor $executor = null)
@@ -128,7 +128,7 @@ class Filesystem
      *
      * @param  string            $directory
      * @throws \RuntimeException
-     * @return Promise
+     * @return PromiseInterface
      */
     public function removeDirectoryAsync($directory)
     {
@@ -166,7 +166,7 @@ class Filesystem
      *
      * @return bool|null Returns null, when no edge case was hit. Otherwise a bool whether removal was successfull
      */
-    private function removeEdgeCases($directory)
+    private function removeEdgeCases($directory, $fallbackToPhp = true)
     {
         if ($this->isSymlinkedDirectory($directory)) {
             return $this->unlinkSymlinkedDirectory($directory);
@@ -188,7 +188,7 @@ class Filesystem
             throw new \RuntimeException('Aborting an attempted deletion of '.$directory.', this was probably not intended, if it is a real use case please report it.');
         }
 
-        if (!\function_exists('proc_open')) {
+        if (!\function_exists('proc_open') && $fallbackToPhp) {
             return $this->removeDirectoryPhp($directory);
         }
 
@@ -207,6 +207,11 @@ class Filesystem
      */
     public function removeDirectoryPhp($directory)
     {
+        $edgeCaseResult = $this->removeEdgeCases($directory, false);
+        if ($edgeCaseResult !== null) {
+            return $edgeCaseResult;
+        }
+
         try {
             $it = new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS);
         } catch (\UnexpectedValueException $e) {
@@ -228,6 +233,9 @@ class Filesystem
                 $this->unlink($file->getPathname());
             }
         }
+
+        // release locks on the directory, see https://github.com/composer/composer/issues/9945
+        unset($ri, $it, $file);
 
         return $this->rmdir($directory);
     }
@@ -536,7 +544,13 @@ class Filesystem
         $parts = array();
         $path = strtr($path, '\\', '/');
         $prefix = '';
-        $absolute = false;
+        $absolute = '';
+
+        // extract windows UNC paths e.g. \\foo\bar
+        if (strpos($path, '//') === 0 && \strlen($path) > 2) {
+            $absolute = '//';
+            $path = substr($path, 2);
+        }
 
         // extract a prefix being a protocol://, protocol:, protocol://drive: or simply drive:
         if (preg_match('{^( [0-9a-z]{2,}+: (?: // (?: [a-z]: )? )? | [a-z]: )}ix', $path, $match)) {
@@ -545,13 +559,13 @@ class Filesystem
         }
 
         if (strpos($path, '/') === 0) {
-            $absolute = true;
+            $absolute = '/';
             $path = substr($path, 1);
         }
 
         $up = false;
         foreach (explode('/', $path) as $chunk) {
-            if ('..' === $chunk && ($absolute || $up)) {
+            if ('..' === $chunk && ($absolute !== '' || $up)) {
                 array_pop($parts);
                 $up = !(empty($parts) || '..' === end($parts));
             } elseif ('.' !== $chunk && '' !== $chunk) {
@@ -560,7 +574,7 @@ class Filesystem
             }
         }
 
-        return $prefix.($absolute ? '/' : '').implode('/', $parts);
+        return $prefix.((string) $absolute).implode('/', $parts);
     }
 
     /**
@@ -569,7 +583,7 @@ class Filesystem
      * And other possible unforeseen disasters, see https://github.com/composer/composer/pull/9422
      *
      * @param  string $path
-     * @return bool
+     * @return string
      */
     public static function trimTrailingSlash($path)
     {
@@ -598,6 +612,33 @@ class Filesystem
         }
 
         return preg_replace('{^file://}i', '', $path);
+    }
+
+    /**
+     * Cross-platform safe version of is_readable()
+     *
+     * This will also check for readability by reading the file as is_readable can not be trusted on network-mounts
+     * and \\wsl$ paths. See https://github.com/composer/composer/issues/8231 and https://bugs.php.net/bug.php?id=68926
+     *
+     * @param  string $path
+     * @return bool
+     */
+    public static function isReadable($path)
+    {
+        if (is_readable($path)) {
+            return true;
+        }
+
+        if (is_file($path)) {
+            return false !== Silencer::call('file_get_contents', $path, false, null, 0, 1);
+        }
+
+        if (is_dir($path)) {
+            return false !== Silencer::call('opendir', $path);
+        }
+
+        // assume false otherwise
+        return false;
     }
 
     protected function directorySize($directory)

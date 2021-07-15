@@ -37,24 +37,6 @@ class ComposerSchemaTest extends TestCase
         $this->assertEquals($expectedError, $this->check($json));
     }
 
-    public function testRequiredProperties()
-    {
-        $json = '{ }';
-        $result = $this->check($json);
-        $this->assertContains(array('property' => 'name', 'message' => 'The property name is required', 'constraint' => 'required'), $result);
-        $this->assertContains(array('property' => 'description', 'message' => 'The property description is required', 'constraint' => 'required'), $result);
-
-        $json = '{ "name": "vendor/package" }';
-        $this->assertEquals(array(
-            array('property' => 'description', 'message' => 'The property description is required', 'constraint' => 'required'),
-        ), $this->check($json));
-
-        $json = '{ "description": "generic description" }';
-        $this->assertEquals(array(
-            array('property' => 'name', 'message' => 'The property name is required', 'constraint' => 'required'),
-        ), $this->check($json));
-    }
-
     public function testOptionalAbandonedProperty()
     {
         $json = '{"name": "vendor/package", "description": "description", "abandoned": true}';
@@ -71,25 +53,23 @@ class ComposerSchemaTest extends TestCase
 
     public function testMinimumStabilityValues()
     {
-        $json = '{ "name": "vendor/package", "description": "generic description", "minimum-stability": "" }';
-        $this->assertEquals(array(
+        $expectedError = array(
             array(
                 'property' => 'minimum-stability',
-                'message' => 'Does not match the regex pattern ^dev|alpha|beta|rc|RC|stable$',
-                'constraint' => 'pattern',
-                'pattern' => '^dev|alpha|beta|rc|RC|stable$',
+                'message' => 'Does not have a value in the enumeration ["dev","alpha","beta","rc","RC","stable"]',
+                'constraint' => 'enum',
+                'enum' => array('dev', 'alpha', 'beta', 'rc', 'RC', 'stable'),
             ),
-        ), $this->check($json), 'empty string');
+        );
+
+        $json = '{ "name": "vendor/package", "description": "generic description", "minimum-stability": "" }';
+        $this->assertEquals($expectedError, $this->check($json), 'empty string');
 
         $json = '{ "name": "vendor/package", "description": "generic description", "minimum-stability": "dummy" }';
-        $this->assertEquals(array(
-            array(
-                'property' => 'minimum-stability',
-                'message' => 'Does not match the regex pattern ^dev|alpha|beta|rc|RC|stable$',
-                'constraint' => 'pattern',
-                'pattern' => '^dev|alpha|beta|rc|RC|stable$',
-            ),
-        ), $this->check($json), 'dummy');
+        $this->assertEquals($expectedError, $this->check($json), 'dummy');
+
+        $json = '{ "name": "vendor/package", "description": "generic description", "minimum-stability": "devz" }';
+        $this->assertEquals($expectedError, $this->check($json), 'devz');
 
         $json = '{ "name": "vendor/package", "description": "generic description", "minimum-stability": "dev" }';
         $this->assertTrue($this->check($json), 'dev');

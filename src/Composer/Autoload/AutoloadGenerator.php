@@ -24,6 +24,7 @@ use Composer\Repository\PlatformRepository;
 use Composer\Semver\Constraint\Bound;
 use Composer\Semver\Constraint\MatchAllConstraint;
 use Composer\Util\Filesystem;
+use Composer\Util\Platform;
 use Composer\Script\ScriptEvents;
 use Composer\Util\PackageSorter;
 use Composer\Json\JsonFile;
@@ -144,22 +145,25 @@ class AutoloadGenerator
             // Force scanPsrPackages when classmap is authoritative
             $scanPsrPackages = true;
         }
-        if ($this->runScripts) {
+
+        // auto-set devMode based on whether dev dependencies are installed or not
+        if (null === $this->devMode) {
+            // we assume no-dev mode if no vendor dir is present or it is too old to contain dev information
+            $this->devMode = false;
+
             $installedJson = new JsonFile($config->get('vendor-dir').'/composer/installed.json');
-            $isDevInstall = null;
             if ($installedJson->exists()) {
                 $installedJson = $installedJson->read();
-                $isDevInstall = isset($installedJson['dev']) ? $installedJson['dev'] : null;
+                if (isset($installedJson['dev'])) {
+                    $this->devMode = $installedJson['dev'];
+                }
             }
-            // auto-set devMode based on whether dev dependencies are installed or not
-            if (null !== $isDevInstall && null === $this->devMode) {
-                $this->devMode = $isDevInstall;
-            }
+        }
 
-            // set COMPOSER_DEV_MODE in case not set yet so it is available in the dump-autoload autoload
+        if ($this->runScripts) {
+            // set COMPOSER_DEV_MODE in case not set yet so it is available in the dump-autoload event listeners
             if (!isset($_SERVER['COMPOSER_DEV_MODE'])) {
-                $_SERVER['COMPOSER_DEV_MODE'] = $this->devMode ? '1' : '0';
-                putenv('COMPOSER_DEV_MODE='.$_SERVER['COMPOSER_DEV_MODE']);
+                Platform::putEnv('COMPOSER_DEV_MODE', $this->devMode ? '1' : '0');
             }
 
             $this->eventDispatcher->dispatchScript(ScriptEvents::PRE_AUTOLOAD_DUMP, $this->devMode, array(), array(
@@ -346,7 +350,7 @@ EOF;
         $classmapFile .= ");\n";
 
         if (!$suffix) {
-            if (!$config->get('autoloader-suffix') && is_readable($vendorPath.'/autoload.php')) {
+            if (!$config->get('autoloader-suffix') && Filesystem::isReadable($vendorPath.'/autoload.php')) {
                 $content = file_get_contents($vendorPath.'/autoload.php');
                 if (preg_match('{ComposerAutoloaderInit([^:\s]+)::}', $content, $match)) {
                     $suffix = $match[1];
@@ -1131,7 +1135,7 @@ INITIALIZER;
 
             foreach ($autoload[$type] as $namespace => $paths) {
                 foreach ((array) $paths as $path) {
-                    if (($type === 'files' || $type === 'classmap' || $type === 'exclude-from-classmap') && $package->getTargetDir() && !is_readable($installPath.'/'.$path)) {
+                    if (($type === 'files' || $type === 'classmap' || $type === 'exclude-from-classmap') && $package->getTargetDir() && !Filesystem::isReadable($installPath.'/'.$path)) {
                         // remove target-dir from file paths of the root package
                         if ($package === $rootPackage) {
                             $targetDir = str_replace('\\<dirsep\\>', '[\\\\/]', preg_quote(str_replace(array('/', '\\'), '<dirsep>', $package->getTargetDir())));

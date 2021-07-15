@@ -12,12 +12,16 @@
 
 namespace Composer\Test\Repository;
 
+use Composer\Package\RootPackageInterface;
 use Composer\Repository\FilesystemRepository;
 use Composer\Test\TestCase;
 use Composer\Json\JsonFile;
+use Composer\Util\Filesystem;
 
 class FilesystemRepositoryTest extends TestCase
 {
+    private $root;
+
     public function testRepositoryRead()
     {
         $json = $this->createJsonFileMock();
@@ -80,13 +84,17 @@ class FilesystemRepositoryTest extends TestCase
     {
         $json = $this->createJsonFileMock();
 
+        $repoDir = realpath(sys_get_temp_dir()).'/repo_write_test/';
+        $fs = new Filesystem();
+        $fs->removeDirectory($repoDir);
+
         $repository = new FilesystemRepository($json);
         $im = $this->getMockBuilder('Composer\Installer\InstallationManager')
             ->disableOriginalConstructor()
             ->getMock();
         $im->expects($this->exactly(2))
             ->method('getInstallPath')
-            ->will($this->returnValue('/foo/bar/vendor/woop/woop'));
+            ->will($this->returnValue($repoDir.'/vendor/woop/woop'));
 
         $json
             ->expects($this->once())
@@ -95,7 +103,7 @@ class FilesystemRepositoryTest extends TestCase
         $json
             ->expects($this->once())
             ->method('getPath')
-            ->will($this->returnValue('/foo/bar/vendor/composer/installed.json'));
+            ->will($this->returnValue($repoDir.'/vendor/composer/installed.json'));
         $json
             ->expects($this->once())
             ->method('exists')
@@ -121,6 +129,9 @@ class FilesystemRepositoryTest extends TestCase
     public function testRepositoryWritesInstalledPhp()
     {
         $dir = $this->getUniqueTmpDirectory();
+        $this->root = $dir;
+        chdir($dir);
+
         $json = new JsonFile($dir.'/installed.json');
 
         $rootPackage = $this->getPackage('__root__', 'dev-master', 'Composer\Package\RootPackage');
@@ -152,12 +163,34 @@ class FilesystemRepositoryTest extends TestCase
         $pkg = $this->getPackage('c/c', '3.0');
         $repository->addPackage($pkg);
 
+        $pkg = $this->getPackage('meta/package', '3.0');
+        $pkg->setType('metapackage');
+        $repository->addPackage($pkg);
+
         $im = $this->getMockBuilder('Composer\Installer\InstallationManager')
             ->disableOriginalConstructor()
             ->getMock();
         $im->expects($this->any())
             ->method('getInstallPath')
-            ->will($this->returnValue('/foo/bar/vendor/woop/woop'));
+            ->will($this->returnCallback(function ($package) use ($dir) {
+                // check for empty paths handling
+                if ($package->getType() === 'metapackage') {
+                    return '';
+                }
+
+                if ($package->getName() === 'c/c') {
+                    // check for absolute paths
+                    return '/foo/bar/vendor/c/c';
+                }
+
+                // check for cwd
+                if ($package instanceof RootPackageInterface) {
+                    return $dir;
+                }
+
+                // check for relative paths
+                return 'vendor/'.$package->getName();
+            }));
 
         $repository->write(true, $im);
         $this->assertSame(require __DIR__.'/Fixtures/installed.php', require $dir.'/installed.php');
